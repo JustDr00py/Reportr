@@ -94,6 +94,7 @@ class RawData(Base):
 
     id: int = Column(Integer, primary_key=True, index=True, autoincrement=True)
     device: str = Column(String(128), nullable=False, index=True)
+    location: str = Column(String(256), nullable=True)
     value: float = Column(Float, nullable=False)
     # Store as UTC datetime; the ingest endpoint normalises timezone info
     timestamp: datetime = Column(DateTime, nullable=False, index=True)
@@ -101,7 +102,7 @@ class RawData(Base):
     def __repr__(self) -> str:
         return (
             f"<RawData id={self.id} device={self.device!r} "
-            f"value={self.value} ts={self.timestamp}>"
+            f"location={self.location!r} value={self.value} ts={self.timestamp}>"
         )
 
 

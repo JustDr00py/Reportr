@@ -28,11 +28,12 @@ def create_raw_entry(
     db: Session,
     *,
     device: str,
+    location: str = "",
     value: float,
     timestamp: datetime,
 ) -> RawData:
     """Insert a single submeter ping into raw_data and return it."""
-    entry = RawData(device=device, value=value, timestamp=timestamp)
+    entry = RawData(device=device, location=location, value=value, timestamp=timestamp)
     db.add(entry)
     db.commit()
     db.refresh(entry)

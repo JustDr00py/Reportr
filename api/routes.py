@@ -64,6 +64,7 @@ class IngestPayload(BaseModel):
     """
 
     Device: str = Field(..., min_length=1, max_length=128, examples=["Meter_A"])
+    Location: str = Field("", max_length=256, examples=["Building A - Floor 2"])
     Value: float = Field(..., description="Current meter reading (cumulative)")
     Timestamp: datetime = Field(..., examples=["2023-10-25T14:30:00Z"])
 
@@ -89,6 +90,7 @@ class IngestResponse(BaseModel):
     success: bool
     id: int
     device: str
+    location: str
     value: float
     timestamp: datetime
 
@@ -102,6 +104,7 @@ class StatusResponse(BaseModel):
 class RawDataItem(BaseModel):
     id: int
     device: str
+    location: str | None = None
     value: float
     timestamp: datetime
 
@@ -139,14 +142,19 @@ def ingest(payload: IngestPayload, db: Session = Depends(get_db)) -> IngestRespo
         entry = create_raw_entry(
             db,
             device=payload.Device,
+            location=payload.Location,
             value=payload.Value,
             timestamp=payload.Timestamp,
         )
-        logger.info("Ingested: device=%s value=%s ts=%s", entry.device, entry.value, entry.timestamp)
+        logger.info(
+            "Ingested: device=%s location=%s value=%s ts=%s",
+            entry.device, entry.location, entry.value, entry.timestamp,
+        )
         return IngestResponse(
             success=True,
             id=entry.id,
             device=entry.device,
+            location=entry.location or "",
             value=entry.value,
             timestamp=entry.timestamp,
         )

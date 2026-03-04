@@ -399,7 +399,7 @@ class ReportrApp(App):
 
     def _setup_tables(self) -> None:
         raw_table: DataTable = self.query_one("#table-raw", DataTable)
-        raw_table.add_columns("ID", "Device", "Value", "Timestamp")
+        raw_table.add_columns("ID", "Device", "Location", "Value", "Timestamp")
 
         summary_table: DataTable = self.query_one("#table-summary", DataTable)
         summary_table.add_columns(
@@ -479,6 +479,7 @@ class ReportrApp(App):
             table.add_row(
                 str(row.get("id", "")),
                 row.get("device", ""),
+                row.get("location") or "",
                 f"{row.get('value', 0):,.2f}",
                 ts,
             )
