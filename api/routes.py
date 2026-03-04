@@ -26,6 +26,7 @@ from database.crud import (
     create_raw_entry,
     get_all_monthly_summaries,
     get_distinct_devices,
+    get_distinct_locations,
     get_recent_raw_data,
     get_raw_data_count,
     get_summary_count,
@@ -193,10 +194,16 @@ def list_summaries(db: Session = Depends(get_db)) -> list[SummaryItem]:
     return [SummaryItem.model_validate(r) for r in rows]
 
 
+@router.get("/locations", response_model=list[str], summary="List all location names")
+def list_locations(db: Session = Depends(get_db)) -> list[str]:
+    """Return sorted list of all unique non-empty location values in raw_data."""
+    return get_distinct_locations(db)
+
+
 @router.get("/devices", response_model=list[str], summary="List all device names")
-def list_devices(db: Session = Depends(get_db)) -> list[str]:
-    """Return sorted list of all unique device names present in raw_data."""
-    return get_distinct_devices(db)
+def list_devices(location: str | None = None, db: Session = Depends(get_db)) -> list[str]:
+    """Return sorted list of unique device names, optionally filtered by location."""
+    return get_distinct_devices(db, location=location or None)
 
 
 @router.get("/trend", response_model=list[RawDataItem], summary="Trend data for a device")

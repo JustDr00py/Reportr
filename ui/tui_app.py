@@ -332,6 +332,18 @@ class ReportrApp(App):
         align: left middle;
     }
 
+    #trend-location-label {
+        color: #8899cc;
+        height: 3;
+        content-align: left middle;
+        width: 12;
+    }
+
+    #location-select {
+        width: 36;
+        margin-right: 2;
+    }
+
     #trend-device-label {
         color: #8899cc;
         height: 3;
@@ -340,7 +352,7 @@ class ReportrApp(App):
     }
 
     #device-select {
-        width: 40;
+        width: 36;
     }
 
     #trend-chart {
@@ -376,6 +388,8 @@ class ReportrApp(App):
 
             with TabPane("Value Trend", id="trend"):
                 with Horizontal(id="trend-selector"):
+                    yield Label(" Location: ", id="trend-location-label")
+                    yield Select([], id="location-select", prompt="All locations")
                     yield Label(" Device: ", id="trend-device-label")
                     yield Select([], id="device-select", prompt="Select a device…")
                 yield TrendChart(id="trend-chart")
@@ -393,6 +407,7 @@ class ReportrApp(App):
 
     def on_mount(self) -> None:
         self._current_device: str = ""
+        self._current_location: str = ""
         self._setup_tables()
         self.log_panel.push("Dashboard mounted — loading data…", "INFO")
         self.load_all_data()
@@ -425,11 +440,16 @@ class ReportrApp(App):
 
     async def _async_load_all(self) -> None:
         try:
-            status_data, raw_data, summary_data, devices = await asyncio.gather(
+            devices_qs = (
+                f"/devices?{urlencode({'location': self._current_location})}"
+                if self._current_location else "/devices"
+            )
+            status_data, raw_data, summary_data, locations, devices = await asyncio.gather(
                 api_get("/status"),
                 api_get("/raw?limit=200"),
                 api_get("/summary"),
-                api_get("/devices"),
+                api_get("/locations"),
+                api_get(devices_qs),
                 return_exceptions=True,
             )
 
@@ -447,6 +467,11 @@ class ReportrApp(App):
                 self.call_from_thread(self._populate_summary_table, summary_data)
             else:
                 self.call_from_thread(self.log_panel.push, f"Summary fetch failed: {summary_data}", "ERROR")
+
+            if isinstance(locations, list):
+                self.call_from_thread(self._populate_location_select, locations)
+            else:
+                self.call_from_thread(self.log_panel.push, f"Location list fetch failed: {locations}", "WARN")
 
             if isinstance(devices, list):
                 self.call_from_thread(self._populate_device_select, devices)
@@ -500,6 +525,13 @@ class ReportrApp(App):
                 created,
             )
 
+    def _populate_location_select(self, locations: list[str]) -> None:
+        select: Select = self.query_one("#location-select", Select)
+        select.set_options([(loc, loc) for loc in locations])
+        # Restore current selection if still valid; otherwise leave as "All locations"
+        if self._current_location in locations:
+            select.value = self._current_location
+
     def _populate_device_select(self, devices: list[str]) -> None:
         select: Select = self.query_one("#device-select", Select)
         options = [(d, d) for d in devices]
@@ -510,6 +542,23 @@ class ReportrApp(App):
             select.value = target
             # Explicitly load trend in case the value didn't change (no Changed event)
             self.load_trend_data(target)
+
+    # -----------------------------------------------------------------------
+    # Device list loading (filtered by location)
+    # -----------------------------------------------------------------------
+
+    @work(exclusive=True, thread=True)
+    def load_devices_for_location(self, location: str) -> None:
+        asyncio.run(self._async_load_devices(location))
+
+    async def _async_load_devices(self, location: str) -> None:
+        try:
+            qs = f"?{urlencode({'location': location})}" if location else ""
+            devices = await api_get(f"/devices{qs}")
+            if isinstance(devices, list):
+                self.call_from_thread(self._populate_device_select, devices)
+        except Exception as exc:
+            self.call_from_thread(self.log_panel.push, f"Device list error: {exc}", "WARN")
 
     # -----------------------------------------------------------------------
     # Trend Data Loading
@@ -584,6 +633,11 @@ class ReportrApp(App):
     @on(Button.Pressed, "#btn-rollup")
     def on_rollup_pressed(self) -> None:
         self.trigger_rollup()
+
+    @on(Select.Changed, "#location-select")
+    def on_location_select_changed(self, event: Select.Changed) -> None:
+        self._current_location = "" if event.value is Select.BLANK else str(event.value)
+        self.load_devices_for_location(self._current_location)
 
     @on(Select.Changed, "#device-select")
     def on_device_select_changed(self, event: Select.Changed) -> None:

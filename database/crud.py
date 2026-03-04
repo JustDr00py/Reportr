@@ -50,10 +50,18 @@ def get_recent_raw_data(db: Session, *, limit: int = 100) -> list[RawData]:
     )
 
 
-def get_distinct_devices(db: Session) -> list[str]:
-    """Return a sorted list of all unique device names in raw_data."""
-    rows = db.query(RawData.device).distinct().all()
-    return sorted(r.device for r in rows)
+def get_distinct_locations(db: Session) -> list[str]:
+    """Return a sorted list of all unique non-empty location values in raw_data."""
+    rows = db.query(RawData.location).distinct().all()
+    return sorted(r.location for r in rows if r.location)
+
+
+def get_distinct_devices(db: Session, *, location: str | None = None) -> list[str]:
+    """Return a sorted list of all unique device names, optionally filtered by location."""
+    q = db.query(RawData.device).distinct()
+    if location:
+        q = q.filter(RawData.location == location)
+    return sorted(r.device for r in q.all())
 
 
 def get_last_raw_entry_for_month(
