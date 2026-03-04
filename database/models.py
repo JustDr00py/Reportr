@@ -23,6 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -148,5 +149,15 @@ class MonthlySummary(Base):
 # ---------------------------------------------------------------------------
 
 def init_db() -> None:
-    """Create all tables if they do not already exist."""
+    """Create all tables if they do not already exist, then apply any missing column migrations."""
     Base.metadata.create_all(bind=engine)
+    _migrate_schema()
+
+
+def _migrate_schema() -> None:
+    """Add columns introduced after the initial schema without losing existing data."""
+    with engine.connect() as conn:
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(raw_data)"))}
+        if "location" not in existing:
+            conn.execute(text("ALTER TABLE raw_data ADD COLUMN location TEXT"))
+            conn.commit()
