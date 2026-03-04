@@ -205,6 +205,17 @@ def get_previous_month_last_value(
     return record.last_value if record else None
 
 
+def get_trend_data(db: Session, *, device: str, limit: int = 500) -> list[RawData]:
+    """Return up to `limit` raw readings for `device` ordered oldest-first (for trending)."""
+    return (
+        db.query(RawData)
+        .filter(RawData.device == device)
+        .order_by(RawData.timestamp.asc())
+        .limit(limit)
+        .all()
+    )
+
+
 def get_raw_data_count(db: Session) -> int:
     """Return total number of rows in raw_data (for status display)."""
     return db.query(func.count(RawData.id)).scalar() or 0

@@ -25,9 +25,11 @@ from sqlalchemy.orm import Session
 from database.crud import (
     create_raw_entry,
     get_all_monthly_summaries,
+    get_distinct_devices,
     get_recent_raw_data,
     get_raw_data_count,
     get_summary_count,
+    get_trend_data,
 )
 from database.models import SessionLocal
 
@@ -181,6 +183,19 @@ def list_summaries(db: Session = Depends(get_db)) -> list[SummaryItem]:
     """Return all monthly summary records."""
     rows = get_all_monthly_summaries(db)
     return [SummaryItem.model_validate(r) for r in rows]
+
+
+@router.get("/devices", response_model=list[str], summary="List all device names")
+def list_devices(db: Session = Depends(get_db)) -> list[str]:
+    """Return sorted list of all unique device names present in raw_data."""
+    return get_distinct_devices(db)
+
+
+@router.get("/trend", response_model=list[RawDataItem], summary="Trend data for a device")
+def get_device_trend(device: str, limit: int = 500, db: Session = Depends(get_db)) -> list[RawDataItem]:
+    """Return raw readings for a specific device ordered oldest-first (for charting)."""
+    rows = get_trend_data(db, device=device, limit=max(1, min(limit, 2000)))
+    return [RawDataItem.model_validate(r) for r in rows]
 
 
 @router.post("/rollup", summary="Manually trigger monthly rollup")

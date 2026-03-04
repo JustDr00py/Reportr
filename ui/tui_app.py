@@ -8,9 +8,9 @@ Layout
   ┌─────────────────────────────────────────────────────┐
   │  Header: "⚡ Reportr"  +  status bar (counts)       │
   ├─────────────────────────────────────────────────────┤
-  │  [Raw Readings]  [Monthly Summaries]   ← Tab bar    │
+  │  [Raw Readings]  [Monthly Summaries]  [Value Trend] │
   ├─────────────────────────────────────────────────────┤
-  │  DataTable (active tab)                             │
+  │  DataTable / ASCII chart (active tab)               │
   ├─────────────────────────────────────────────────────┤
   │  [Refresh Data]  [Trigger Rollup]   ← Action bar   │
   ├─────────────────────────────────────────────────────┤
@@ -27,12 +27,13 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import (
     Button,
@@ -40,7 +41,7 @@ from textual.widgets import (
     Footer,
     Header,
     Label,
-    LoadingIndicator,
+    Select,
     Static,
     TabbedContent,
     TabPane,
@@ -115,6 +116,117 @@ class LogPanel(Static):
         if len(self._lines) > self.MAX_LINES:
             self._lines = self._lines[-self.MAX_LINES:]
         self.update("\n".join(self._lines))
+
+
+# ---------------------------------------------------------------------------
+# Trend Chart Widget
+# ---------------------------------------------------------------------------
+
+class TrendChart(Static):
+    """
+    ASCII bar chart that visualises raw meter readings over time for one device.
+
+    Each column represents one (or an average of several) readings bucketed
+    into the available terminal width.  Height is normalised to the visible
+    min/max range so even small drifts become apparent.
+    """
+
+    CHART_HEIGHT = 12
+
+    def __init__(self, *args, **kwargs):
+        super().__init__("", markup=True, *args, **kwargs)
+        self._device: str = ""
+        self._points: list[tuple[str, float]] = []  # (timestamp_str, value)
+
+    def update_data(self, device: str, points: list[tuple[str, float]]) -> None:
+        self._device = device
+        self._points = points
+        self.update(self._build_markup())
+
+    def on_resize(self) -> None:
+        if self._points:
+            self.update(self._build_markup())
+
+    def _build_markup(self) -> str:
+        if not self._points:
+            return (
+                f"[dim]No raw data found for [bold]{self._device}[/bold].  "
+                f"Ingest some readings first.[/dim]"
+            )
+
+        values = [p[1] for p in self._points]
+        timestamps = [p[0] for p in self._points]
+        n = len(values)
+
+        min_v = min(values)
+        max_v = max(values)
+        value_range = max_v - min_v or 1.0
+
+        # 11 chars for Y-axis value + "│" = 12 chars reserved on the left
+        y_label_w = 12
+        chart_w = max(10, (self.size.width or 80) - y_label_w - 2)
+        chart_h = self.CHART_HEIGHT
+
+        # Bucket readings into chart_w columns
+        if n <= chart_w:
+            buckets = list(values)
+            ts_start = timestamps[0]
+            ts_end = timestamps[-1]
+        else:
+            step = n / chart_w
+            buckets = []
+            for i in range(chart_w):
+                s = int(i * step)
+                e = int((i + 1) * step)
+                chunk = values[s:e] or [values[s]]
+                buckets.append(sum(chunk) / len(chunk))
+            ts_start = timestamps[0]
+            ts_end = timestamps[-1]
+
+        bw = len(buckets)
+
+        # Quarter-value markers for the Y-axis labels
+        def y_label_at(row: int) -> str:
+            quarters = {
+                chart_h: max_v,
+                round(chart_h * 0.75): min_v + value_range * 0.75,
+                round(chart_h * 0.50): min_v + value_range * 0.50,
+                round(chart_h * 0.25): min_v + value_range * 0.25,
+                1: min_v,
+            }
+            if row in quarters:
+                return f"{quarters[row]:>10,.1f} \u2502"
+            return " " * 11 + "\u2502"
+
+        # Build chart rows top → bottom
+        rows: list[str] = []
+        for row in range(chart_h, 0, -1):
+            threshold = (row - 0.5) / chart_h
+            bar = "".join(
+                "\u2588" if (v - min_v) / value_range >= threshold else " "
+                for v in buckets
+            )
+            rows.append(f"[cyan]{y_label_at(row)}[/cyan][cornflower_blue]{bar}[/cornflower_blue]")
+
+        # X-axis rule
+        rows.append("[cyan]" + " " * 11 + "\u2514" + "\u2500" * bw + "[/cyan]")
+
+        # Time range labels
+        ts_s = ts_start[:16]
+        ts_e = ts_end[:16]
+        gap = max(0, bw - len(ts_s) - len(ts_e))
+        rows.append(f"[dim]{' ' * 12}{ts_s}{' ' * gap}{ts_e}[/dim]")
+
+        # Header stats line
+        header = (
+            f"[bold white]Device:[/bold white] [bold cyan]{self._device}[/bold cyan]   "
+            f"[green]Min: {min_v:,.2f}[/green]   "
+            f"[yellow]Max: {max_v:,.2f}[/yellow]   "
+            f"[magenta]Latest: {values[-1]:,.2f}[/magenta]   "
+            f"[dim]({n} readings)[/dim]"
+        )
+
+        return header + "\n\n" + "\n".join(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +323,32 @@ class ReportrApp(App):
         overflow-y: auto;
     }
 
-    LoadingIndicator {
-        background: #0f0f1a;
+    /* --- Trend tab --- */
+
+    #trend-selector {
+        height: 5;
+        padding: 1 2;
+        background: #16213E;
+        align: left middle;
+    }
+
+    #trend-device-label {
+        color: #8899cc;
+        height: 3;
+        content-align: left middle;
+        width: 10;
+    }
+
+    #device-select {
+        width: 40;
+    }
+
+    #trend-chart {
+        height: 1fr;
+        padding: 1 2;
+        overflow-y: auto;
+        background: #0a0a14;
+        color: #e0e0ff;
     }
     """
 
@@ -222,6 +358,7 @@ class ReportrApp(App):
         Binding("q", "quit", "Quit", show=True),
         Binding("1", "switch_tab('raw')", "Raw Data", show=False),
         Binding("2", "switch_tab('summary')", "Summaries", show=False),
+        Binding("3", "switch_tab('trend')", "Trend", show=False),
     ]
 
     TITLE = "⚡ Reportr — Submeter Dashboard"
@@ -237,6 +374,12 @@ class ReportrApp(App):
             with TabPane("Monthly Summaries", id="summary"):
                 yield DataTable(id="table-summary", zebra_stripes=True, cursor_type="row")
 
+            with TabPane("Value Trend", id="trend"):
+                with Horizontal(id="trend-selector"):
+                    yield Label(" Device: ", id="trend-device-label")
+                    yield Select([], id="device-select", prompt="Select a device…")
+                yield TrendChart(id="trend-chart")
+
         with Horizontal(id="action-bar"):
             yield Button("⟳  Refresh Data", id="btn-refresh", variant="primary")
             yield Button("⚙  Trigger Rollup", id="btn-rollup", variant="error")
@@ -249,6 +392,7 @@ class ReportrApp(App):
     # -----------------------------------------------------------------------
 
     def on_mount(self) -> None:
+        self._current_device: str = ""
         self._setup_tables()
         self.log_panel.push("Dashboard mounted — loading data…", "INFO")
         self.load_all_data()
@@ -271,40 +415,43 @@ class ReportrApp(App):
         return self.query_one("#status-bar", StatusBar)
 
     # -----------------------------------------------------------------------
-    # Data Loading (runs in background worker thread)
+    # Data Loading — tables + device list (background worker)
     # -----------------------------------------------------------------------
 
     @work(exclusive=True, thread=True)
     def load_all_data(self) -> None:
-        """Fetch all data from the API and update the tables."""
+        """Fetch status, raw data, summaries, and device list from the API."""
         asyncio.run(self._async_load_all())
 
     async def _async_load_all(self) -> None:
         try:
-            status_data, raw_data, summary_data = await asyncio.gather(
+            status_data, raw_data, summary_data, devices = await asyncio.gather(
                 api_get("/status"),
                 api_get("/raw?limit=200"),
                 api_get("/summary"),
+                api_get("/devices"),
                 return_exceptions=True,
             )
 
-            # Update status bar
             if isinstance(status_data, dict):
                 self.call_from_thread(self.status_bar.update_status, status_data)
             else:
                 self.call_from_thread(self.log_panel.push, f"Status fetch failed: {status_data}", "WARN")
 
-            # Update raw table
             if isinstance(raw_data, list):
                 self.call_from_thread(self._populate_raw_table, raw_data)
             else:
                 self.call_from_thread(self.log_panel.push, f"Raw data fetch failed: {raw_data}", "ERROR")
 
-            # Update summary table
             if isinstance(summary_data, list):
                 self.call_from_thread(self._populate_summary_table, summary_data)
             else:
                 self.call_from_thread(self.log_panel.push, f"Summary fetch failed: {summary_data}", "ERROR")
+
+            if isinstance(devices, list):
+                self.call_from_thread(self._populate_device_select, devices)
+            else:
+                self.call_from_thread(self.log_panel.push, f"Device list fetch failed: {devices}", "WARN")
 
             self.call_from_thread(
                 self.log_panel.push,
@@ -327,7 +474,6 @@ class ReportrApp(App):
         table.clear()
         for row in rows:
             ts = row.get("timestamp", "")
-            # Trim microseconds for display
             if "." in ts:
                 ts = ts[:19]
             table.add_row(
@@ -353,6 +499,47 @@ class ReportrApp(App):
                 created,
             )
 
+    def _populate_device_select(self, devices: list[str]) -> None:
+        select: Select = self.query_one("#device-select", Select)
+        options = [(d, d) for d in devices]
+        select.set_options(options)
+
+        if devices:
+            target = self._current_device if self._current_device in devices else devices[0]
+            select.value = target
+            # Explicitly load trend in case the value didn't change (no Changed event)
+            self.load_trend_data(target)
+
+    # -----------------------------------------------------------------------
+    # Trend Data Loading
+    # -----------------------------------------------------------------------
+
+    @work(exclusive=True, thread=True)
+    def load_trend_data(self, device: str) -> None:
+        """Fetch trend data for `device` and update the chart."""
+        asyncio.run(self._async_load_trend(device))
+
+    async def _async_load_trend(self, device: str) -> None:
+        try:
+            qs = urlencode({"device": device, "limit": 500})
+            data = await api_get(f"/trend?{qs}")
+            if isinstance(data, list):
+                points = [(r["timestamp"], r["value"]) for r in data]
+                self.call_from_thread(self._update_trend_chart, device, points)
+            else:
+                self.call_from_thread(self.log_panel.push, f"Trend fetch failed: {data}", "ERROR")
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            self.call_from_thread(
+                self.log_panel.push, "Cannot reach API — is the server running?", "ERROR"
+            )
+        except Exception as exc:
+            self.call_from_thread(self.log_panel.push, f"Trend error: {exc}", "ERROR")
+
+    def _update_trend_chart(self, device: str, points: list[tuple[str, float]]) -> None:
+        self._current_device = device
+        chart: TrendChart = self.query_one("#trend-chart", TrendChart)
+        chart.update_data(device, points)
+
     # -----------------------------------------------------------------------
     # Rollup (background worker)
     # -----------------------------------------------------------------------
@@ -366,10 +553,8 @@ class ReportrApp(App):
         try:
             result = await api_post("/rollup")
             message = result.get("message", str(result))
-            # Show first 120 chars of message in log
             short = message[:120].replace("\n", " | ")
             self.call_from_thread(self.log_panel.push, f"Rollup: {short}", "OK")
-            # Refresh data after rollup
             await self._async_load_all()
         except httpx.HTTPStatusError as exc:
             self.call_from_thread(
@@ -379,25 +564,30 @@ class ReportrApp(App):
             )
         except (httpx.ConnectError, httpx.ConnectTimeout):
             self.call_from_thread(
-                self.log_panel.push,
-                "Cannot reach API — is the server running?",
-                "ERROR",
+                self.log_panel.push, "Cannot reach API — is the server running?", "ERROR"
             )
         except Exception as exc:
             self.call_from_thread(self.log_panel.push, f"Rollup error: {exc}", "ERROR")
 
     # -----------------------------------------------------------------------
-    # Button Handlers
+    # Button / Select Handlers
     # -----------------------------------------------------------------------
 
     @on(Button.Pressed, "#btn-refresh")
     def on_refresh_pressed(self) -> None:
         self.log_panel.push("Refreshing data…", "INFO")
         self.load_all_data()
+        if self._current_device:
+            self.load_trend_data(self._current_device)
 
     @on(Button.Pressed, "#btn-rollup")
     def on_rollup_pressed(self) -> None:
         self.trigger_rollup()
+
+    @on(Select.Changed, "#device-select")
+    def on_device_select_changed(self, event: Select.Changed) -> None:
+        if event.value is not Select.BLANK:
+            self.load_trend_data(str(event.value))
 
     # -----------------------------------------------------------------------
     # Keybinding Actions
@@ -406,6 +596,8 @@ class ReportrApp(App):
     def action_refresh(self) -> None:
         self.log_panel.push("Refreshing data…", "INFO")
         self.load_all_data()
+        if self._current_device:
+            self.load_trend_data(self._current_device)
 
     def action_trigger_rollup(self) -> None:
         self.trigger_rollup()
