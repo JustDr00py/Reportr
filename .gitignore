@@ -1,5 +1,55 @@
+# Plans and documentation
 /Plans
-/reportr.db
-/reportr.db-shm
-/reportr.db-wal
-/venv
+
+# Database files (SQLite)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Generated reports and exports
+reports/
+*.pdf
+*.csv
+
+# Environment variables and secrets
+.env
+.env.local
+*.env
+secrets.json
+credentials.json
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Backup files
+*.backup
+*.bak
+*.tmp
