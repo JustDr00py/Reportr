@@ -13,10 +13,16 @@
 # Clone/copy your project onto the VPS
 git clone <your-repo> /opt/reportr
 cd /opt/reportr
+
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-Or copy with `scp -r ./Reportr user@vps:/opt/reportr`.
+Or copy with `scp -r ./Reportr user@vps:/opt/reportr` (then create venv and install dependencies).
 
 ---
 
@@ -35,13 +41,15 @@ After=network.target
 Type=simple
 User=your_user
 WorkingDirectory=/opt/reportr
-ExecStart=/usr/bin/python3 run.py --api-only
+ExecStart=/opt/reportr/venv/bin/python run.py --api-only
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+**Note:** Replace `your_user` with your actual username, and adjust the path if you installed reportr elsewhere.
 
 ```bash
 sudo systemctl daemon-reload
@@ -58,10 +66,13 @@ SSH into the VPS and run:
 
 ```bash
 cd /opt/reportr
+source venv/bin/activate
 python run.py --tui-only
 ```
 
 The TUI connects to the locally running API and renders in your terminal. Quit with `q` — the API keeps running.
+
+**Tip:** You can also run directly without activating: `venv/bin/python run.py --tui-only`
 
 ---
 
@@ -90,5 +101,7 @@ sudo ufw allow from <meter-device-ip> to any port 8000
 | Stop API service | `sudo systemctl stop reportr` |
 | Restart after code changes | `sudo systemctl restart reportr` |
 | View API logs | `journalctl -u reportr -f` |
-| Open TUI | `python run.py --tui-only` |
+| Open TUI | `cd /opt/reportr && source venv/bin/activate && python run.py --tui-only` |
+| Open TUI (without activating) | `cd /opt/reportr && venv/bin/python run.py --tui-only` |
 | Keep TUI alive after disconnect | Run inside `tmux` or `screen` |
+| Update dependencies | `cd /opt/reportr && source venv/bin/activate && pip install -r requirements.txt` |
