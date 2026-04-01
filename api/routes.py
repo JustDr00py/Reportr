@@ -188,9 +188,9 @@ def list_raw(limit: int = 100, db: Session = Depends(get_db)) -> list[RawDataIte
     response_model=list[SummaryItem],
     summary="All monthly summaries",
 )
-def list_summaries(db: Session = Depends(get_db)) -> list[SummaryItem]:
-    """Return all monthly summary records."""
-    rows = get_all_monthly_summaries(db)
+def list_summaries(location: str | None = None, db: Session = Depends(get_db)) -> list[SummaryItem]:
+    """Return all monthly summary records, optionally filtered by location."""
+    rows = get_all_monthly_summaries(db, location=location or None)
     return [SummaryItem.model_validate(r) for r in rows]
 
 

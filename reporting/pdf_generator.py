@@ -66,6 +66,8 @@ def generate_report(
     opening_value: float,
     closing_value: float,
     usage: float,
+    location: str = "",
+    generation_date: str | None = None,
 ) -> Path:
     """
     Generate a PDF usage report and save it to the reports directory.
@@ -77,16 +79,29 @@ def generate_report(
     opening_value: Meter reading at the start of the period
     closing_value: Meter reading at the end of the period
     usage        : Calculated consumption (closing − opening)
+    location     : Location name (optional), used for folder organization
+    generation_date : Date folder name (optional), defaults to current date YYYYMMDD
 
     Returns
     -------
     Path
         Absolute path to the generated PDF file.
     """
+    # Create folder structure: reports/GENERATION_DATE/Location_Name/
+    if generation_date is None:
+        generation_date = datetime.utcnow().strftime("%Y%m%d")
+
+    # Sanitize location name for folder (replace spaces with underscores)
+    safe_location = location.replace(" ", "_").replace("/", "_").replace("\\", "_") if location else "Unknown_Location"
+
+    # Create nested directory structure
+    target_dir = REPORTS_DIR / generation_date / safe_location
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     safe_device = device.replace("/", "_").replace("\\", "_").replace(" ", "_")
     safe_month = month_year.replace("/", "-")
     filename = f"{safe_device}_{safe_month}.pdf"
-    output_path = REPORTS_DIR / filename
+    output_path = target_dir / filename
 
     # Parse month_year for human-readable label
     try:
@@ -98,6 +113,7 @@ def generate_report(
     _build_pdf(
         path=output_path,
         device=device,
+        location=location,
         month_year=month_year,
         period_label=period_label,
         opening_value=opening_value,
@@ -117,6 +133,7 @@ def _build_pdf(
     *,
     path: Path,
     device: str,
+    location: str,
     month_year: str,
     period_label: str,
     opening_value: float,
@@ -202,6 +219,7 @@ def _build_pdf(
 
     meta_data = [
         [Paragraph("Device:", meta_label_style),      Paragraph(device, meta_style)],
+        [Paragraph("Location:", meta_label_style),    Paragraph(location or "N/A", meta_style)],
         [Paragraph("Reporting Period:", meta_label_style), Paragraph(period_label, meta_style)],
         [Paragraph("Report Generated:", meta_label_style),
          Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), meta_style)],

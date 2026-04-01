@@ -173,13 +173,25 @@ def create_monthly_summary(
     return summary
 
 
-def get_all_monthly_summaries(db: Session) -> list[MonthlySummary]:
-    """Return all monthly summaries ordered by device then month (newest first)."""
-    return (
-        db.query(MonthlySummary)
-        .order_by(MonthlySummary.device, MonthlySummary.month_year.desc())
-        .all()
-    )
+def get_all_monthly_summaries(db: Session, *, location: str | None = None) -> list[MonthlySummary]:
+    """
+    Return all monthly summaries ordered by device then month (newest first).
+    Optionally filtered by location (requires joining with RawData to get device locations).
+    """
+    query = db.query(MonthlySummary)
+
+    if location:
+        # Get list of distinct devices for the given location
+        devices_in_location = [
+            r.device for r in
+            db.query(RawData.device)
+            .filter(RawData.location == location)
+            .distinct()
+            .all()
+        ]
+        query = query.filter(MonthlySummary.device.in_(devices_in_location))
+
+    return query.order_by(MonthlySummary.device, MonthlySummary.month_year.desc()).all()
 
 
 def get_previous_month_last_value(

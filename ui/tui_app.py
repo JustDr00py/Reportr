@@ -24,8 +24,10 @@ rather than hitting the database directly, keeping concerns separated.
 from __future__ import annotations
 
 import asyncio
+import csv
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -40,6 +42,7 @@ from textual.widgets import (
     DataTable,
     Footer,
     Header,
+    Input,
     Label,
     Select,
     Static,
@@ -323,6 +326,50 @@ class ReportrApp(App):
         overflow-y: auto;
     }
 
+    /* --- Summary tab --- */
+
+    #summary-selector {
+        height: 5;
+        padding: 1 2;
+        background: #16213E;
+        align: left middle;
+    }
+
+    #summary-location-label {
+        color: #8899cc;
+        height: 3;
+        content-align: left middle;
+        width: 12;
+    }
+
+    #summary-location-select {
+        width: 30;
+        margin-right: 2;
+    }
+
+    #summary-rate-label {
+        color: #8899cc;
+        height: 3;
+        content-align: left middle;
+        width: 8;
+    }
+
+    #rate-input {
+        width: 12;
+        margin-right: 2;
+    }
+
+    #btn-export-csv {
+        background: #0F6030;
+        color: #ffffff;
+        border: solid #1a9950;
+        height: 3;
+    }
+
+    #btn-export-csv:hover {
+        background: #1a9950;
+    }
+
     /* --- Trend tab --- */
 
     #trend-selector {
@@ -384,6 +431,12 @@ class ReportrApp(App):
                 yield DataTable(id="table-raw", zebra_stripes=True, cursor_type="row")
 
             with TabPane("Monthly Summaries", id="summary"):
+                with Horizontal(id="summary-selector"):
+                    yield Label(" Location: ", id="summary-location-label")
+                    yield Select([], id="summary-location-select", prompt="All locations")
+                    yield Label(" Rate: ", id="summary-rate-label")
+                    yield Input(value="0.12", placeholder="0.12", id="rate-input")
+                    yield Button("Export CSV", id="btn-export-csv", variant="success")
                 yield DataTable(id="table-summary", zebra_stripes=True, cursor_type="row")
 
             with TabPane("Value Trend", id="trend"):
@@ -408,6 +461,8 @@ class ReportrApp(App):
     def on_mount(self) -> None:
         self._current_device: str = ""
         self._current_location: str = ""
+        self._summary_location: str = ""
+        self._rate: float = 0.12  # Default rate
         self._setup_tables()
         self.log_panel.push("Dashboard mounted — loading data…", "INFO")
         self.load_all_data()
@@ -418,7 +473,7 @@ class ReportrApp(App):
 
         summary_table: DataTable = self.query_one("#table-summary", DataTable)
         summary_table.add_columns(
-            "ID", "Device", "Month/Year", "Last Value", "Usage", "Created At"
+            "ID", "Device", "Month/Year", "Last Value", "Usage", "Cost", "Created At"
         )
 
     @property
@@ -444,10 +499,14 @@ class ReportrApp(App):
                 f"/devices?{urlencode({'location': self._current_location})}"
                 if self._current_location else "/devices"
             )
+            summary_qs = (
+                f"/summary?{urlencode({'location': self._summary_location})}"
+                if self._summary_location else "/summary"
+            )
             status_data, raw_data, summary_data, locations, devices = await asyncio.gather(
                 api_get("/status"),
                 api_get("/raw?limit=200"),
-                api_get("/summary"),
+                api_get(summary_qs),
                 api_get("/locations"),
                 api_get(devices_qs),
                 return_exceptions=True,
@@ -516,21 +575,32 @@ class ReportrApp(App):
             created = row.get("created_at", "")
             if "." in created:
                 created = created[:19]
+            usage = row.get("usage_difference", 0)
+            cost = usage * self._rate
             table.add_row(
                 str(row.get("id", "")),
                 row.get("device", ""),
                 row.get("month_year", ""),
                 f"{row.get('last_value', 0):,.2f}",
-                f"{row.get('usage_difference', 0):,.2f}",
+                f"{usage:,.2f}",
+                f"{cost:,.2f}",
                 created,
             )
 
     def _populate_location_select(self, locations: list[str]) -> None:
-        select: Select = self.query_one("#location-select", Select)
-        select.set_options([(loc, loc) for loc in locations])
+        # Populate trend location selector
+        trend_select: Select = self.query_one("#location-select", Select)
+        trend_select.set_options([(loc, loc) for loc in locations])
         # Restore current selection if still valid; otherwise leave as "All locations"
         if self._current_location in locations:
-            select.value = self._current_location
+            trend_select.value = self._current_location
+
+        # Populate summary location selector
+        summary_select: Select = self.query_one("#summary-location-select", Select)
+        summary_select.set_options([(loc, loc) for loc in locations])
+        # Restore current selection if still valid; otherwise leave as "All locations"
+        if self._summary_location in locations:
+            summary_select.value = self._summary_location
 
     def _populate_device_select(self, devices: list[str]) -> None:
         select: Select = self.query_one("#device-select", Select)
@@ -542,6 +612,31 @@ class ReportrApp(App):
             select.value = target
             # Explicitly load trend in case the value didn't change (no Changed event)
             self.load_trend_data(target)
+
+    # -----------------------------------------------------------------------
+    # Summary loading (filtered by location)
+    # -----------------------------------------------------------------------
+
+    @work(exclusive=True, thread=True)
+    def load_summaries(self) -> None:
+        """Fetch summaries filtered by the current summary location."""
+        asyncio.run(self._async_load_summaries())
+
+    async def _async_load_summaries(self) -> None:
+        try:
+            qs = f"?{urlencode({'location': self._summary_location})}" if self._summary_location else ""
+            summary_data = await api_get(f"/summary{qs}")
+            if isinstance(summary_data, list):
+                self.call_from_thread(self._populate_summary_table, summary_data)
+                self.call_from_thread(
+                    self.log_panel.push,
+                    f"Summaries refreshed — {len(summary_data)} records",
+                    "OK",
+                )
+            else:
+                self.call_from_thread(self.log_panel.push, f"Summary fetch failed: {summary_data}", "ERROR")
+        except Exception as exc:
+            self.call_from_thread(self.log_panel.push, f"Summary error: {exc}", "ERROR")
 
     # -----------------------------------------------------------------------
     # Device list loading (filtered by location)
@@ -591,6 +686,69 @@ class ReportrApp(App):
         chart.update_data(device, points)
 
     # -----------------------------------------------------------------------
+    # CSV Export
+    # -----------------------------------------------------------------------
+
+    @work(exclusive=True, thread=True)
+    def export_summaries_to_csv(self) -> None:
+        """Export current monthly summaries (with location filter and cost) to CSV."""
+        self.call_from_thread(self.log_panel.push, "Exporting summaries to CSV…", "INFO")
+        asyncio.run(self._async_export_csv())
+
+    async def _async_export_csv(self) -> None:
+        try:
+            # Fetch current summaries with location filter
+            qs = f"?{urlencode({'location': self._summary_location})}" if self._summary_location else ""
+            summary_data = await api_get(f"/summary{qs}")
+
+            if not isinstance(summary_data, list):
+                self.call_from_thread(self.log_panel.push, "Export failed: no data", "ERROR")
+                return
+
+            # Create reports directory if it doesn't exist
+            reports_dir = Path("/opt/reportr/reports")
+            reports_dir.mkdir(exist_ok=True)
+
+            # Generate filename with timestamp and location filter
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            location_suffix = f"_{self._summary_location.replace(' ', '_')}" if self._summary_location else "_all"
+            filename = f"summaries{location_suffix}_{timestamp}.csv"
+            filepath = reports_dir / filename
+
+            # Write CSV
+            with open(filepath, "w", newline="") as csvfile:
+                fieldnames = ["ID", "Device", "Month/Year", "Last Value", "Usage", "Rate", "Cost", "Created At"]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for row in summary_data:
+                    usage = row.get("usage_difference", 0)
+                    cost = usage * self._rate
+                    created = row.get("created_at", "")
+                    if "." in created:
+                        created = created[:19]
+
+                    writer.writerow({
+                        "ID": row.get("id", ""),
+                        "Device": row.get("device", ""),
+                        "Month/Year": row.get("month_year", ""),
+                        "Last Value": f"{row.get('last_value', 0):.2f}",
+                        "Usage": f"{usage:.2f}",
+                        "Rate": f"{self._rate:.4f}",
+                        "Cost": f"{cost:.2f}",
+                        "Created At": created,
+                    })
+
+            self.call_from_thread(
+                self.log_panel.push,
+                f"Exported {len(summary_data)} records to {filename}",
+                "OK",
+            )
+
+        except Exception as exc:
+            self.call_from_thread(self.log_panel.push, f"Export error: {exc}", "ERROR")
+
+    # -----------------------------------------------------------------------
     # Rollup (background worker)
     # -----------------------------------------------------------------------
 
@@ -634,10 +792,33 @@ class ReportrApp(App):
     def on_rollup_pressed(self) -> None:
         self.trigger_rollup()
 
+    @on(Button.Pressed, "#btn-export-csv")
+    def on_export_pressed(self) -> None:
+        """Export current monthly summaries to CSV."""
+        self.export_summaries_to_csv()
+
     @on(Select.Changed, "#location-select")
     def on_location_select_changed(self, event: Select.Changed) -> None:
         self._current_location = "" if event.value is Select.BLANK else str(event.value)
         self.load_devices_for_location(self._current_location)
+
+    @on(Select.Changed, "#summary-location-select")
+    def on_summary_location_select_changed(self, event: Select.Changed) -> None:
+        self._summary_location = "" if event.value is Select.BLANK else str(event.value)
+        self.load_summaries()
+
+    @on(Input.Changed, "#rate-input")
+    def on_rate_input_changed(self, event: Input.Changed) -> None:
+        """Update rate when input changes and recalculate costs."""
+        try:
+            new_rate = float(event.value) if event.value else 0.0
+            if new_rate != self._rate:
+                self._rate = new_rate
+                # Reload summaries to recalculate costs
+                self.load_summaries()
+        except ValueError:
+            # Invalid float input, ignore
+            pass
 
     @on(Select.Changed, "#device-select")
     def on_device_select_changed(self, event: Select.Changed) -> None:

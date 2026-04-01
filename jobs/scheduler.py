@@ -123,6 +123,7 @@ def _process_device(db, device: str, year: int, month: int, month_year_key: str)
         return
 
     closing_value = last_entry.value
+    location = last_entry.location or ""  # Get location from the raw data entry
     logger.info("Device %s: closing value for %s = %s", device, month_year_key, closing_value)
 
     # Step 2 — Get the opening value from the MonthlySummary of the prior month
@@ -156,12 +157,18 @@ def _process_device(db, device: str, year: int, month: int, month_year_key: str)
     # Step 4 — Generate the PDF report
     try:
         from reporting.pdf_generator import generate_report
+
+        # Use current date for folder organization
+        generation_date = datetime.utcnow().strftime("%Y%m%d")
+
         report_path = generate_report(
             device=device,
             month_year=month_year_key,
             opening_value=opening_value,
             closing_value=closing_value,
             usage=usage,
+            location=location,
+            generation_date=generation_date,
         )
         logger.info("Device %s: PDF report saved to %s", device, report_path)
     except Exception as exc:
