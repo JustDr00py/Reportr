@@ -347,6 +347,11 @@ class ReportrApp(App):
         margin-right: 2;
     }
 
+    #summary-month-select {
+        width: 20;
+        margin-right: 2;
+    }
+
     #summary-rate-label {
         color: #8899cc;
         height: 3;
@@ -434,6 +439,8 @@ class ReportrApp(App):
                 with Horizontal(id="summary-selector"):
                     yield Label(" Location: ", id="summary-location-label")
                     yield Select([], id="summary-location-select", prompt="All locations")
+                    yield Label(" Month: ", id="summary-month-label")
+                    yield Select([], id="summary-month-select", prompt="All months")
                     yield Label(" Rate: ", id="summary-rate-label")
                     yield Input(value="0.12", placeholder="0.12", id="rate-input")
                     yield Button("Export CSV", id="btn-export-csv", variant="success")
@@ -462,6 +469,7 @@ class ReportrApp(App):
         self._current_device: str = ""
         self._current_location: str = ""
         self._summary_location: str = ""
+        self._summary_month: str = ""  # Empty = all months
         self._rate: float = 0.12  # Default rate
         self._setup_tables()
         self.log_panel.push("Dashboard mounted — loading data…", "INFO")
@@ -499,15 +507,19 @@ class ReportrApp(App):
                 f"/devices?{urlencode({'location': self._current_location})}"
                 if self._current_location else "/devices"
             )
-            summary_qs = (
-                f"/summary?{urlencode({'location': self._summary_location})}"
-                if self._summary_location else "/summary"
-            )
-            status_data, raw_data, summary_data, locations, devices = await asyncio.gather(
+            # Build summary query string with both location and month filters
+            summary_params = {}
+            if self._summary_location:
+                summary_params['location'] = self._summary_location
+            if self._summary_month:
+                summary_params['month_year'] = self._summary_month
+            summary_qs = f"/summary?{urlencode(summary_params)}" if summary_params else "/summary"
+            status_data, raw_data, summary_data, locations, months, devices = await asyncio.gather(
                 api_get("/status"),
                 api_get("/raw?limit=200"),
                 api_get(summary_qs),
                 api_get("/locations"),
+                api_get("/months"),
                 api_get(devices_qs),
                 return_exceptions=True,
             )
@@ -531,6 +543,11 @@ class ReportrApp(App):
                 self.call_from_thread(self._populate_location_select, locations)
             else:
                 self.call_from_thread(self.log_panel.push, f"Location list fetch failed: {locations}", "WARN")
+
+            if isinstance(months, list):
+                self.call_from_thread(self._populate_month_select, months)
+            else:
+                self.call_from_thread(self.log_panel.push, f"Month list fetch failed: {months}", "WARN")
 
             if isinstance(devices, list):
                 self.call_from_thread(self._populate_device_select, devices)
@@ -602,6 +619,14 @@ class ReportrApp(App):
         if self._summary_location in locations:
             summary_select.value = self._summary_location
 
+    def _populate_month_select(self, months: list[str]) -> None:
+        """Populate the summary month selector with available months."""
+        month_select: Select = self.query_one("#summary-month-select", Select)
+        month_select.set_options([(m, m) for m in months])
+        # Restore current selection if still valid; otherwise leave as "All months"
+        if self._summary_month in months:
+            month_select.value = self._summary_month
+
     def _populate_device_select(self, devices: list[str]) -> None:
         select: Select = self.query_one("#device-select", Select)
         options = [(d, d) for d in devices]
@@ -624,7 +649,14 @@ class ReportrApp(App):
 
     async def _async_load_summaries(self) -> None:
         try:
-            qs = f"?{urlencode({'location': self._summary_location})}" if self._summary_location else ""
+            # Build query string with both location and month filters
+            params = {}
+            if self._summary_location:
+                params['location'] = self._summary_location
+            if self._summary_month:
+                params['month_year'] = self._summary_month
+            qs = f"?{urlencode(params)}" if params else ""
+
             summary_data = await api_get(f"/summary{qs}")
             if isinstance(summary_data, list):
                 self.call_from_thread(self._populate_summary_table, summary_data)
@@ -697,8 +729,13 @@ class ReportrApp(App):
 
     async def _async_export_csv(self) -> None:
         try:
-            # Fetch current summaries with location filter
-            qs = f"?{urlencode({'location': self._summary_location})}" if self._summary_location else ""
+            # Fetch current summaries with location and month filters
+            params = {}
+            if self._summary_location:
+                params['location'] = self._summary_location
+            if self._summary_month:
+                params['month_year'] = self._summary_month
+            qs = f"?{urlencode(params)}" if params else ""
             summary_data = await api_get(f"/summary{qs}")
 
             if not isinstance(summary_data, list):
@@ -709,10 +746,11 @@ class ReportrApp(App):
             reports_dir = Path("/opt/reportr/reports")
             reports_dir.mkdir(exist_ok=True)
 
-            # Generate filename with timestamp and location filter
+            # Generate filename with timestamp, location, and month filters
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             location_suffix = f"_{self._summary_location.replace(' ', '_')}" if self._summary_location else "_all"
-            filename = f"summaries{location_suffix}_{timestamp}.csv"
+            month_suffix = f"_{self._summary_month}" if self._summary_month else "_allmonths"
+            filename = f"summaries{location_suffix}{month_suffix}_{timestamp}.csv"
             filepath = reports_dir / filename
 
             # Write CSV
@@ -805,6 +843,11 @@ class ReportrApp(App):
     @on(Select.Changed, "#summary-location-select")
     def on_summary_location_select_changed(self, event: Select.Changed) -> None:
         self._summary_location = "" if event.value is Select.BLANK else str(event.value)
+        self.load_summaries()
+
+    @on(Select.Changed, "#summary-month-select")
+    def on_summary_month_select_changed(self, event: Select.Changed) -> None:
+        self._summary_month = "" if event.value is Select.BLANK else str(event.value)
         self.load_summaries()
 
     @on(Input.Changed, "#rate-input")

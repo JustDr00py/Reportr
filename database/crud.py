@@ -173,10 +173,22 @@ def create_monthly_summary(
     return summary
 
 
-def get_all_monthly_summaries(db: Session, *, location: str | None = None) -> list[MonthlySummary]:
+def get_all_monthly_summaries(
+    db: Session,
+    *,
+    location: str | None = None,
+    month_year: str | None = None,
+) -> list[MonthlySummary]:
     """
     Return all monthly summaries ordered by device then month (newest first).
-    Optionally filtered by location (requires joining with RawData to get device locations).
+
+    Parameters
+    ----------
+    location : str, optional
+        Filter by device location (requires joining with RawData).
+    month_year : str, optional
+        Filter by specific month in YYYY-MM format (e.g., "2026-03").
+        If not provided, returns all months.
     """
     query = db.query(MonthlySummary)
 
@@ -190,6 +202,9 @@ def get_all_monthly_summaries(db: Session, *, location: str | None = None) -> li
             .all()
         ]
         query = query.filter(MonthlySummary.device.in_(devices_in_location))
+
+    if month_year:
+        query = query.filter(MonthlySummary.month_year == month_year)
 
     return query.order_by(MonthlySummary.device, MonthlySummary.month_year.desc()).all()
 
@@ -245,3 +260,9 @@ def get_raw_data_count(db: Session) -> int:
 def get_summary_count(db: Session) -> int:
     """Return total number of rows in monthly_summary."""
     return db.query(func.count(MonthlySummary.id)).scalar() or 0
+
+
+def get_distinct_months(db: Session) -> list[str]:
+    """Return a sorted list of all unique month_year values in monthly_summary (newest first)."""
+    rows = db.query(MonthlySummary.month_year).distinct().all()
+    return sorted((r.month_year for r in rows), reverse=True)

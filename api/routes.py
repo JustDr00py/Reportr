@@ -188,9 +188,19 @@ def list_raw(limit: int = 100, db: Session = Depends(get_db)) -> list[RawDataIte
     response_model=list[SummaryItem],
     summary="All monthly summaries",
 )
-def list_summaries(location: str | None = None, db: Session = Depends(get_db)) -> list[SummaryItem]:
-    """Return all monthly summary records, optionally filtered by location."""
-    rows = get_all_monthly_summaries(db, location=location or None)
+def list_summaries(
+    location: str | None = None,
+    month_year: str | None = None,
+    db: Session = Depends(get_db),
+) -> list[SummaryItem]:
+    """
+    Return all monthly summary records.
+
+    Query parameters:
+    - location: Filter by device location
+    - month_year: Filter by specific month in YYYY-MM format (e.g., "2026-03")
+    """
+    rows = get_all_monthly_summaries(db, location=location or None, month_year=month_year or None)
     return [SummaryItem.model_validate(r) for r in rows]
 
 
@@ -198,6 +208,13 @@ def list_summaries(location: str | None = None, db: Session = Depends(get_db)) -
 def list_locations(db: Session = Depends(get_db)) -> list[str]:
     """Return sorted list of all unique non-empty location values in raw_data."""
     return get_distinct_locations(db)
+
+
+@router.get("/months", response_model=list[str], summary="List all available months")
+def list_months(db: Session = Depends(get_db)) -> list[str]:
+    """Return sorted list of all unique month_year values in monthly_summary (newest first)."""
+    from database.crud import get_distinct_months
+    return get_distinct_months(db)
 
 
 @router.get("/devices", response_model=list[str], summary="List all device names")

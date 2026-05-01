@@ -5,22 +5,20 @@ APScheduler setup and the monthly rollup job logic.
 
 Rollup Logic (runs at 00:01 on the 1st of every month)
 -------------------------------------------------------
+IMPORTANT: This system assumes meters RESET to zero at the start of each month.
+
 For every unique device in raw_data:
 
   1.  Find the raw record with the LATEST timestamp in the *previous* month.
-      This is the closing meter value for that month.
+      This is the final meter reading for that month.
 
-  2.  Look up the MonthlySummary for the month BEFORE the previous month
-      to get the opening value (last_value).
+  2.  The usage for the month equals the final reading (since meters start at 0).
 
-  3.  Calculate usage = closing_value − opening_value.
-      (If no prior summary exists, usage equals closing_value — first month.)
+  3.  Write a new MonthlySummary record for the previous month.
 
-  4.  Write a new MonthlySummary record for the previous month.
+  4.  Generate a PDF report for the device/month.
 
-  5.  Generate a PDF report for the device/month.
-
-  6.  Delete the raw_data rows for that device/month (space pruning).
+  5.  Delete the raw_data rows for that device/month (space pruning).
 """
 
 from __future__ import annotations
@@ -109,10 +107,13 @@ def _process_device(db, device: str, year: int, month: int, month_year_key: str)
     """
     Run the full rollup pipeline for a single device in a given month.
 
+    NOTE: This system assumes meters RESET to zero at the start of each month.
+    Therefore, the usage for a month is simply the final (closing) meter reading.
+
     All DB interactions for this device happen within this function so that
     a failure for one device doesn't abort the others.
     """
-    # Step 1 — Find the last raw record for the previous month
+    # Step 1 — Find the last raw record for the month
     last_entry = get_last_raw_entry_for_month(db, device=device, year=year, month=month)
 
     if last_entry is None:
@@ -124,25 +125,16 @@ def _process_device(db, device: str, year: int, month: int, month_year_key: str)
 
     closing_value = last_entry.value
     location = last_entry.location or ""  # Get location from the raw data entry
-    logger.info("Device %s: closing value for %s = %s", device, month_year_key, closing_value)
 
-    # Step 2 — Get the opening value from the MonthlySummary of the prior month
-    opening_value = get_previous_month_last_value(db, device=device, year=year, month=month)
+    # Step 2 — Calculate usage
+    # Since meters reset to 0 at the start of each month, the usage IS the closing value
+    usage = closing_value
+    opening_value = 0.0  # Meters always start at 0 each month
 
-    if opening_value is None:
-        # First month on record — usage equals the closing value itself
-        logger.info(
-            "Device %s: no prior summary found; treating closing value as usage.",
-            device
-        )
-        usage = closing_value
-        opening_value = 0.0
-    else:
-        usage = closing_value - opening_value
-        logger.info(
-            "Device %s: opening=%s closing=%s usage=%s",
-            device, opening_value, closing_value, usage
-        )
+    logger.info(
+        "Device %s: %s usage = %.2f kWh (meter resets monthly)",
+        device, month_year_key, usage
+    )
 
     # Step 3 — Persist the MonthlySummary record
     summary = create_monthly_summary(
